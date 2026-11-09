@@ -1,22 +1,36 @@
 package com.musebeauty.api;
 
+import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.security.crypto.password.PasswordEncoder;
 
 @Configuration
 class AdminBootstrap {
-  @Bean CommandLineRunner bootstrapAdmin(JdbcTemplate db, PasswordEncoder encoder,
-    @Value("${app.bootstrap.admin-email:}") String email,
-    @Value("${app.bootstrap.admin-password:}") String password) {
+  @Bean CommandLineRunner bootstrapAdmin(JdbcTemplate db,
+    @Value("${app.bootstrap.admin-user-id:}") String userId,
+    @Value("${app.bootstrap.admin-email:}") String email) {
     return args -> {
-      if(email.isBlank() && password.isBlank()) return;
-      if(email.isBlank() || password.length()<12) throw new IllegalStateException("Set both bootstrap admin values and use a password of at least 12 characters");
-      Integer exists=db.queryForObject("select count(*) from customers where role='ADMIN'",Integer.class);
-      if(exists==0) db.update("insert into customers(email,password_hash,first_name,last_name,role) values(lower(?),?,'Store','Administrator','ADMIN')",email,encoder.encode(password));
+      if (userId.isBlank() && email.isBlank()) return;
+      if (userId.isBlank() || email.isBlank()) {
+        throw new IllegalStateException("Set both BOOTSTRAP_ADMIN_USER_ID and BOOTSTRAP_ADMIN_EMAIL");
+      }
+      UUID authUserId;
+      try { authUserId = UUID.fromString(userId); }
+      catch (IllegalArgumentException e) { throw new IllegalStateException("BOOTSTRAP_ADMIN_USER_ID must be the UUID of an existing Supabase Auth user", e); }
+      promoteAdmin(db, authUserId, email.trim().toLowerCase(java.util.Locale.ROOT));
     };
+  }
+
+  void promoteAdmin(JdbcTemplate db, UUID authUserId, String email) {
+    var existing = db.query("select id from customers where auth_user_id=?", (rs, row) -> rs.getLong(1), authUserId);
+    if (existing.isEmpty()) {
+      db.update("insert into customers(auth_user_id,email,first_name,last_name,role) values(?,?,'Store','Administrator','ADMIN') on conflict(auth_user_id) do update set role='ADMIN'",
+        authUserId, email);
+    } else {
+      db.update("update customers set role='ADMIN' where auth_user_id=?", authUserId);
+    }
   }
 }
