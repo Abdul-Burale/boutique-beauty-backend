@@ -40,8 +40,46 @@ class ApiController {
   record AddressWrite(@NotBlank @Size(max=160) String recipientName, @NotBlank @Size(max=180) String line1, @Size(max=180) String line2,
     @NotBlank @Size(max=100) String city, @Size(max=100) String region, @NotBlank @Size(max=24) String postalCode,
     @NotBlank @Pattern(regexp="[A-Za-z]{2}") String countryCode, boolean isDefault) {}
+  record ContentPageWrite(@NotBlank @Pattern(regexp="[^<>]*") @Size(max=160) String title,
+    @NotBlank @Pattern(regexp="[a-z0-9]+(?:-[a-z0-9]+)*") @Size(max=120) String slug,
+    @Pattern(regexp="[^<>]*") @Size(max=100) String eyebrow, @NotBlank @Pattern(regexp="[^<>]*") @Size(max=30000) String body, boolean published,
+    @Pattern(regexp="[^<>]*") @Size(max=80) String footerGroup, @NotNull @Min(0) @Max(100000) Integer displayOrder) {}
+  record ContentPage(long id, String title, String slug, String eyebrow, String body, boolean published,
+    String footerGroup, int displayOrder, java.time.Instant createdAt, java.time.Instant updatedAt) {}
+  record FooterHelpLink(@NotBlank @Pattern(regexp="[^<>]*") @Size(max=100) String label,
+    @NotBlank @Pattern(regexp="^(https://[^\\s<>]+|/(?!/)[^\\s<>]*)$") @Size(max=2048) String url,
+    @NotNull @Min(0) @Max(100000) Integer displayOrder) {}
+  record StorefrontWrite(@NotBlank @Pattern(regexp="^https://[^\\s<>]+$") @Size(max=2048) String websiteUrl,
+    @NotBlank @Email @Size(max=254) String customerEmail, @NotBlank @Pattern(regexp="[^<>]*") @Size(max=2000) String postalAddress,
+    @NotNull @Size(max=30) List<@Valid FooterHelpLink> footerHelpLinks) {}
+  record Storefront(String websiteUrl, String customerEmail, String postalAddress, List<FooterHelpLink> footerHelpLinks) {}
 
   @PostMapping("/newsletter") Map<String,String> newsletter(@Valid @RequestBody NewsletterSignup s){db.update("insert into newsletter_subscriptions(email) values(lower(trim(?))) on conflict(email) do update set active=true,subscribed_at=now()",s.email());return Map.of("status","subscribed");}
+
+  @GetMapping("/content/pages") List<ContentPage> publicContentPages(){return db.query("select id,title,slug,eyebrow,body,published,footer_group,display_order,created_at,updated_at from content_pages where published=true order by footer_group nulls last,display_order,id",this::contentPage);}
+  @GetMapping("/content/pages/{slug}") ContentPage publicContentPage(@PathVariable @Pattern(regexp="[a-z0-9]+(?:-[a-z0-9]+)*") String slug){return contentPageBySlug(slug,true);}
+  @GetMapping("/admin/content/pages") List<ContentPage> adminContentPages(){return db.query("select id,title,slug,eyebrow,body,published,footer_group,display_order,created_at,updated_at from content_pages order by display_order,id",this::contentPage);}
+  @PostMapping("/admin/content/pages") @ResponseStatus(HttpStatus.CREATED) @Transactional ContentPage createContentPage(@Valid @RequestBody ContentPageWrite page){
+    Long id=db.queryForObject("insert into content_pages(title,slug,eyebrow,body,published,footer_group,display_order) values(?,?,?,?,?,?,?) returning id",Long.class,page.title().trim(),page.slug(),blankToNull(page.eyebrow()),page.body(),page.published(),blankToNull(page.footerGroup()),page.displayOrder());
+    return contentPageById(id);
+  }
+  @PutMapping("/admin/content/pages/{id}") @Transactional ContentPage updateContentPage(@PathVariable @Positive long id,@Valid @RequestBody ContentPageWrite page){
+    if(db.update("update content_pages set title=?,slug=?,eyebrow=?,body=?,published=?,footer_group=?,display_order=?,updated_at=now() where id=?",page.title().trim(),page.slug(),blankToNull(page.eyebrow()),page.body(),page.published(),blankToNull(page.footerGroup()),page.displayOrder(),id)==0)throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Content page not found");
+    return contentPageById(id);
+  }
+  @DeleteMapping("/admin/content/pages/{id}") @ResponseStatus(HttpStatus.NO_CONTENT) void deleteContentPage(@PathVariable @Positive long id){if(db.update("delete from content_pages where id=?",id)==0)throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Content page not found");}
+  private ContentPage contentPageById(long id){return db.queryForObject("select id,title,slug,eyebrow,body,published,footer_group,display_order,created_at,updated_at from content_pages where id=?",this::contentPage,id);}
+  private ContentPage contentPageBySlug(String slug,boolean publishedOnly){var rows=db.query("select id,title,slug,eyebrow,body,published,footer_group,display_order,created_at,updated_at from content_pages where slug=? and (?=false or published=true)",this::contentPage,slug,publishedOnly);if(rows.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Content page not found");return rows.get(0);}
+  private ContentPage contentPage(java.sql.ResultSet rs,int row)throws java.sql.SQLException{return new ContentPage(rs.getLong("id"),rs.getString("title"),rs.getString("slug"),rs.getString("eyebrow"),rs.getString("body"),rs.getBoolean("published"),rs.getString("footer_group"),rs.getInt("display_order"),rs.getTimestamp("created_at").toInstant(),rs.getTimestamp("updated_at").toInstant());}
+  private String blankToNull(String value){return value==null||value.isBlank()?null:value.trim();}
+  @GetMapping("/content/storefront") Storefront publicStorefront(){return storefront();}
+  @PutMapping("/admin/content/storefront") @Transactional Storefront updateStorefront(@Valid @RequestBody StorefrontWrite data){
+    db.update("update storefront_settings set website_url=?,customer_email=?,postal_address=?,updated_at=now() where id=true",data.websiteUrl().trim(),data.customerEmail().trim().toLowerCase(),data.postalAddress().trim());
+    db.update("delete from storefront_help_links");
+    for(FooterHelpLink link:data.footerHelpLinks())db.update("insert into storefront_help_links(label,url,display_order) values(?,?,?)",link.label().trim(),link.url().trim(),link.displayOrder());
+    return storefront();
+  }
+  private Storefront storefront(){var settings=db.queryForMap("select website_url,customer_email,postal_address from storefront_settings where id=true");List<FooterHelpLink> links=db.query("select label,url,display_order from storefront_help_links order by display_order,id",(rs,row)->new FooterHelpLink(rs.getString("label"),rs.getString("url"),rs.getInt("display_order")));return new Storefront((String)settings.get("website_url"),(String)settings.get("customer_email"),(String)settings.get("postal_address"),links);}
 
   @GetMapping("/catalog/categories") List<Map<String,Object>> categories() { return db.queryForList("select id,name,slug from categories where active=true order by name"); }
   @GetMapping("/catalog/products") Map<String,Object> products(@RequestParam(defaultValue="0") @Min(0) @Max(100000) int page,@RequestParam(defaultValue="24") @Min(1) @Max(100) int size,

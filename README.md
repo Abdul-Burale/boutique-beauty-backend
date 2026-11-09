@@ -38,7 +38,7 @@ Do not use wildcard CORS origins. The API uses bearer tokens, not credentialed b
 
 ## Database and migrations
 
-Flyway in `src/main/resources/db/migration` owns the application schema. V1 creates customers, products/categories, variants/options, inventory, addresses, baskets, orders/order-line snapshots and newsletter subscriptions. V2 adds the nullable unique `customers.auth_user_id` UUID while preserving customer/profile and order data. V3 enables RLS and revokes Supabase `anon`/`authenticated` access to application tables; data access is through this API. V4 removes the obsolete password hash column and custom `sessions`/`login_attempts` tables. Historical migrations should not be edited after deployment; later changes belong in new numbered migrations.
+Flyway in `src/main/resources/db/migration` owns the application schema. V1 creates customers, products/categories, variants/options, inventory, addresses, baskets, orders/order-line snapshots and newsletter subscriptions. V2 adds the nullable unique `customers.auth_user_id` UUID while preserving customer/profile and order data. V3 enables RLS and revokes Supabase `anon`/`authenticated` access to application tables; data access is through this API. V4 removes the obsolete password hash column and custom `sessions`/`login_attempts` tables. V5 adds editable content pages, singleton storefront contact details and ordered footer help links, with RLS and direct Data API access restrictions. Historical migrations should not be edited after deployment; later changes belong in new numbered migrations.
 
 Existing customers are not automatically linked by matching email. After verifying a customer identity, an administrator can link the Supabase Auth UUID to the existing profile using a controlled database operation. New authenticated users are provisioned idempotently on their first API request, keyed by the JWT subject, and receive a basket. Product variants hold shade/size options; product `image_url` stores the resulting image URL/path. Prices are integer minor units in GBP.
 
@@ -60,6 +60,8 @@ Routes are prefixed with `/api`; errors use JSON fields `timestamp`, `status`, `
 | `GET /catalog/categories` | Public | List active categories |
 | `GET /catalog/products?page=0&size=24&q=serum&category=serums&sort=featured` | Public | Search, category filtering, bounded pagination; sort is `featured`, `price_asc`, `price_desc`, or `name_asc` |
 | `GET /catalog/products/{slug}` | Public | Product and active variants |
+| `GET /content/pages`, `GET /content/pages/{slug}` | Public | Published content pages, ordered by footer group and display order |
+| `GET /content/storefront` | Public | Website URL, customer email, postal address and footer help links |
 | `GET /account/me` | Customer or Admin | Read own application profile and database role |
 | `GET /account/addresses` | Customer | Read own addresses |
 | `POST /account/addresses`, `DELETE /account/addresses/{id}` | Customer | Manage own addresses |
@@ -69,6 +71,10 @@ Routes are prefixed with `/api`; errors use JSON fields `timestamp`, `status`, `
 | `POST /admin/products/{id}/variants`, `PUT /admin/products/{productId}/variants/{variantId}`, `PUT /admin/inventory/{variantId}` | Admin | Add or edit a variant's SKU/options/price and update its stock |
 | `GET /admin/orders`, `PATCH /admin/orders/{id}/status` | Admin | Review orders and advance eligible order statuses |
 | `POST /admin/storage/product-images/upload-url` | Admin | Issue a short-lived signed upload URL for a generated product image path |
+| `GET/POST /admin/content/pages`, `PUT/DELETE /admin/content/pages/{id}` | Admin | List, create, replace or delete content pages; page slugs are unique |
+| `PUT /admin/content/storefront` | Admin | Replace storefront contact details and ordered footer help links |
+
+Content page bodies, titles, labels, and postal addresses are plain text. The API rejects angle brackets in user-authored text and never treats the body as HTML; render it as text in the frontend (do not use an HTML injection/rendering facility). Footer links accept HTTPS URLs or same-site absolute paths only. Page writes use `{ "title", "slug", "eyebrow", "body", "published", "footerGroup", "displayOrder" }`; storefront writes use `{ "websiteUrl", "customerEmail", "postalAddress", "footerHelpLinks": [{ "label", "url", "displayOrder" }] }`. Duplicate slugs return HTTP 409. Public page routes return published pages only; all `/api/admin/**` routes require a valid Supabase JWT and `ADMIN` role from the PostgreSQL customer profile.
 
 ## Supabase Storage product images
 

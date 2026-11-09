@@ -5,6 +5,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import java.util.List;
@@ -14,6 +15,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.TestPropertySource;
@@ -31,6 +33,30 @@ class AuthorizationTest {
 
   @Test void customerDataRequiresSupabaseToken() throws Exception { mvc.perform(get("/api/account/me")).andExpect(status().isUnauthorized()); }
   @Test void adminEndpointsRequireSupabaseToken() throws Exception { mvc.perform(get("/api/admin/products")).andExpect(status().isUnauthorized()); }
+  @Test void adminContentEndpointsRequireSupabaseToken() throws Exception {
+    mvc.perform(get("/api/admin/content/pages")).andExpect(status().isUnauthorized());
+    mvc.perform(post("/api/admin/content/pages").contentType("application/json").content("{}"))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(put("/api/admin/content/storefront").contentType("application/json").content("{}"))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(delete("/api/admin/content/pages/1")).andExpect(status().isUnauthorized());
+  }
+  @Test @WithMockUser(roles="CUSTOMER") void customerCannotAccessAdminContent() throws Exception {
+    mvc.perform(get("/api/admin/content/pages")).andExpect(status().isForbidden());
+    mvc.perform(post("/api/admin/content/pages").contentType("application/json").content("{}"))
+        .andExpect(status().isForbidden());
+    mvc.perform(put("/api/admin/content/storefront").contentType("application/json").content("{}"))
+        .andExpect(status().isForbidden());
+  }
+  @Test void publicContentPagesDoNotRequireAuthentication() throws Exception {
+    org.mockito.Mockito.doReturn(List.of()).when(db).query(anyString(), any(RowMapper.class));
+    mvc.perform(get("/api/content/pages")).andExpect(status().isOk());
+  }
+  @Test @WithMockUser(roles="ADMIN") void contentPageRejectsHtmlMarkup() throws Exception {
+    mvc.perform(post("/api/admin/content/pages").contentType("application/json")
+        .content("{\"title\":\"Ingredients\",\"slug\":\"ingredients\",\"body\":\"<script>alert(1)</script>\",\"published\":false,\"displayOrder\":0}"))
+        .andExpect(status().isBadRequest());
+  }
   @Test @WithMockUser(roles="CUSTOMER") void customerCannotAccessAdminCatalog() throws Exception { mvc.perform(get("/api/admin/products")).andExpect(status().isForbidden()); }
   @Test @WithMockUser(roles="CUSTOMER") void customerCannotRequestProductImageUpload() throws Exception {
     mvc.perform(post("/api/admin/storage/product-images/upload-url").contentType("application/json").content("{\"contentType\":\"image/png\"}")).andExpect(status().isForbidden());
